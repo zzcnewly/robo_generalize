@@ -5,7 +5,7 @@ __pycache__/
 wandb/
 
 # C extensions
-
+uv.lock
 
 # Distribution / packaging
 .Python
