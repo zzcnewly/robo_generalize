@@ -85,6 +85,18 @@ dependencies = [
     "sentencepiece"
 ]
 
+[dependency-groups]
+libero = [
+  "bddl",
+  "cloudpickle",
+  "draccus",
+  "easydict",
+  "gym",
+  "imageio[ffmpeg]",
+  "libero",
+  "mujoco==3.3.2",
+]
+
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",

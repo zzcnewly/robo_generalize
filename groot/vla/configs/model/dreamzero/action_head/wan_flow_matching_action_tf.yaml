@@ -1,4 +1,5 @@
 # @package _global_
+dit_num_layers: 40
 add_pos_embed: true
 hidden_size: 64
 attn_dropout: 0.2
@@ -69,7 +70,7 @@ action_head_cfg:
       freq_dim: 256
       eps: 1e-6
       num_heads: 40
-      num_layers: 40
+      num_layers: ${dit_num_layers}
       max_chunk_size: ${max_chunk_size}
       num_frame_per_block: ${num_frame_per_block}
       num_action_per_block: ${num_action_per_block}

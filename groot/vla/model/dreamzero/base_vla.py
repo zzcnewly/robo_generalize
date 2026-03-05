@@ -497,12 +497,10 @@ class VLA(PreTrainedModel):
 
     @classmethod
     def from_pretrained(
-        cls, 
+        cls,
         pretrained_model_name_or_path: str,
         config: VLAConfig = None
     ):
-        del config
-
         from safetensors.torch import load_file
         import os
         import json
@@ -515,28 +513,31 @@ class VLA(PreTrainedModel):
         if os.path.exists(safetensors_index_path):
             # Handle sharded safetensors
             print(f"Loading sharded safetensors using index: {safetensors_index_path}")
-            
+
             with open(safetensors_index_path, 'r') as f:
                 index = json.load(f)
-            
+
             # Load each shard
             for shard_file in set(index["weight_map"].values()):
                 shard_path = os.path.join(pretrained_model_name_or_path, shard_file)
                 print(f"Loading shard: {shard_path}")
                 shard_state_dict = load_file(shard_path)
                 state_dict.update(shard_state_dict)
-                
+
         elif os.path.exists(safetensors_path):
             # Handle single safetensors file
             print(f"Loading weights from safetensors: {safetensors_path}")
             state_dict.update(load_file(safetensors_path))
-        
-        # Load config
-        print("loading config@@")
-        config_path = os.path.join(pretrained_model_name_or_path, "config.json")
-        with open(config_path, "r") as f:
-            config_dict = json.load(f)
-        config = VLAConfig(**config_dict)
+
+        # Use caller-provided config if given, otherwise load from checkpoint
+        if config is None:
+            print("loading config@@")
+            config_path = os.path.join(pretrained_model_name_or_path, "config.json")
+            with open(config_path, "r") as f:
+                config_dict = json.load(f)
+            config = VLAConfig(**config_dict)
+        else:
+            print("Using caller-provided config (with overrides)")
         print("loading model")
         print("config.action_head_cfg", config.action_head_cfg)
         # Always disable defer_lora_injection

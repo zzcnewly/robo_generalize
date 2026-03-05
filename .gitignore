@@ -1,3 +1,7 @@
+# proj specific
+external/LIBERO-plus/libero/libero/assets
+temp/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -181,6 +185,7 @@ groot/rl/data/
 .DS_Store
 sim_dependencies/
 .venv/*
+.venv
 
 
 # Mujoco

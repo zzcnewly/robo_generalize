@@ -1,0 +1,3 @@
+[submodule "external/LIBERO-plus"]
+	path = external/LIBERO-plus
+	url = https://github.com/sylvestf/LIBERO-plus.git

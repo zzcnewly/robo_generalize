@@ -39,6 +39,7 @@ class Args:
     enable_dit_cache: bool = False
     index: int = 0
     max_chunk_size: int | None = None  # If None, use config value. Otherwise override max_chunk_size for inference.
+    num_dit_layers: int | None = None  # If None, use all 40 layers. Otherwise use fewer layers for faster inference.
 
 
 class ARDroidRoboarenaPolicy:
@@ -763,11 +764,19 @@ def main(args: Args) -> None:
     signal_group = dist.new_group(backend="gloo", timeout=timeout_delta)
     logger.info(f"Rank {rank} initialized signal_group (gloo)")
 
+    # Build model config overrides from CLI args
+    model_config_overrides = []
+    if args.num_dit_layers is not None:
+        model_config_overrides.append(
+            f"action_head_cfg.config.diffusion_model_cfg.num_layers={args.num_dit_layers}"
+        )
+
     policy = GrootSimPolicy(
         embodiment_tag=EmbodimentTag(embodiment_tag),
         model_path=model_path,
         device="cuda" if torch.cuda.is_available() else "cpu",
         device_mesh=device_mesh,
+        model_config_overrides=model_config_overrides if model_config_overrides else [],
     )
 
     # Create server for all ranks - rank 0 handles websocket, others run worker loop
