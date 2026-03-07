@@ -124,6 +124,7 @@ def _make_obs_from_video(
     obs["observation/gripper_position"] = np.zeros(1, dtype=np.float32)
     obs["prompt"] = prompt
     obs["session_id"] = session_id
+    print("all keys:", obs.keys())
     return obs
 
 
