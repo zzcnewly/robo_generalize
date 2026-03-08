@@ -48,7 +48,7 @@ from tqdm import tqdm
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)
 
-VALID_EMBODIMENT_TAGS = [
+VALID_EMBODIMENT_TAGS = [ "libero_sim",
     "real_gr1_arms_only", "real_gr1_arms_only_annotated",
     "real_gr1_arms_waist", "real_gr1_arms_waist_annotated",
     "dexmg_gr1_arms_only_inspire", "dexmg_gr1_arms_only_fourier",
@@ -377,6 +377,64 @@ def build_episodes(parquet_paths: list[Path], info: dict, task_key: str | None, 
 # Validation
 # ---------------------------------------------------------------------------
 
+def inject_annotation_task_column(
+    dataset_path: Path,
+    parquet_paths: list[Path],
+    task_key: str = "annotation.task",
+) -> None:
+    """Add an ``annotation.task`` text column to each parquet file.
+
+    Many LeRobot v2 datasets store language instructions indirectly via a
+    ``task_index`` integer column that references ``meta/tasks.jsonl``.  The
+    GEAR pipeline expects an actual text column in the parquet.  This helper
+    reads the mapping and writes the column in-place.
+
+    If the column already exists in a parquet file it is left untouched.
+    """
+    # Build task_index -> task text mapping from tasks.jsonl
+    tasks_path = dataset_path / "meta" / "tasks.jsonl"
+    episodes_path = dataset_path / "meta" / "episodes.jsonl"
+
+    task_map: dict[int, str] = {}
+
+    if tasks_path.exists():
+        with open(tasks_path) as f:
+            for line in f:
+                entry = json.loads(line)
+                task_map[entry["task_index"]] = entry.get("task", entry.get("tasks", [""])[0] if isinstance(entry.get("tasks"), list) else "")
+
+    # Fallback: build from episodes.jsonl (episode_index -> tasks list)
+    episode_task_map: dict[int, str] = {}
+    if episodes_path.exists():
+        with open(episodes_path) as f:
+            for line in f:
+                entry = json.loads(line)
+                tasks = entry.get("tasks", [])
+                episode_task_map[entry["episode_index"]] = tasks[0] if tasks else ""
+
+    if not task_map and not episode_task_map:
+        log.warning("Neither tasks.jsonl nor episodes.jsonl found – cannot inject %s column", task_key)
+        return
+
+    modified = 0
+    for pp in tqdm(parquet_paths, desc=f"Injecting '{task_key}' column"):
+        df = pd.read_parquet(pp)
+        if task_key in df.columns:
+            continue
+
+        if "task_index" in df.columns and task_map:
+            df[task_key] = df["task_index"].map(task_map).fillna("")
+        elif "episode_index" in df.columns and episode_task_map:
+            df[task_key] = df["episode_index"].map(episode_task_map).fillna("")
+        else:
+            df[task_key] = ""
+
+        df.to_parquet(pp, index=False)
+        modified += 1
+
+    log.info("  Injected '%s' column into %d / %d parquet files", task_key, modified, len(parquet_paths))
+
+
 def validate_dataset(dataset_path: Path, info: dict, modality: dict) -> list[str]:
     """Run basic validation and return a list of warnings."""
     warnings = []
@@ -537,6 +595,14 @@ def main():
         log.error("No parquet files found. Check dataset structure.")
         sys.exit(1)
     log.info("  Found %d parquet files", len(parquet_paths))
+
+    # 4b. Inject annotation.task column if missing from parquets
+    #     (needed when the dataset uses task_index -> tasks.jsonl indirection)
+    if task_key:
+        sample_df = pd.read_parquet(parquet_paths[0])
+        if task_key not in sample_df.columns:
+            log.info("  Column '%s' not found in parquets – injecting from tasks.jsonl / episodes.jsonl", task_key)
+            inject_annotation_task_column(output_path, parquet_paths, task_key)
 
     # 5. Compute stats.json
     stats_path = meta_dir / "stats.json"
