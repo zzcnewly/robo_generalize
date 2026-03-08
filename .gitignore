@@ -1,6 +1,8 @@
 # proj specific
 external/LIBERO-plus/libero/libero/assets
 temp/
+*.slurm
+*.out
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
