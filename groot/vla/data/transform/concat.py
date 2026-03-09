@@ -181,6 +181,8 @@ class ConcatTransform(InvertibleModalityTransform):
                 raise ValueError(f"Action dim {key} not found in action_dims.")
             end_dim = start_dim + self.get_state_action_dims_post_transform(key)
             data[key] = action_tensor[..., start_dim:end_dim]
+            # print(f"Unapplying {key=}, start_dim={start_dim}, end_dim={end_dim}, data[key].shape={data[key].shape}")
+            # NOTE: here for droid embodiment, action transforms from 32 dim to (7 dim + 1 dim), others are paddings, actually padded in DreamTransform module.
             start_dim = end_dim
         if "state" in data:
             assert self.state_concat_order is not None, f"{self.state_concat_order=}"

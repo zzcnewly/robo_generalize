@@ -185,6 +185,7 @@ class VLA(PreTrainedModel):
         backbone_inputs, action_inputs = self.prepare_input(inputs)
         backbone_outputs = self.backbone(backbone_inputs)
         action_head_outputs = self.action_head.lazy_joint_video_action(backbone_outputs, action_inputs, latent_video=latent_video)
+        # up to now action shape is 32 default
         self.validate_data(action_head_outputs, backbone_outputs, is_training=False)
         return action_head_outputs
     

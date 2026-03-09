@@ -105,6 +105,7 @@ VALID_EMBODIMENT_TAGS = [
 ]
 ```
 
+3. add to `groot/vla/configs/model/dreamzero/transform/base.yaml`
 ---
 
 ## Step 3: Add Modality Config and Transforms

@@ -283,6 +283,7 @@ class ARDroidRoboarenaPolicy:
         dist.barrier()
         with torch.no_grad():
             result_batch, video_pred = self._policy.lazy_joint_forward_causal(batch)
+            # import pdb; pdb.set_trace()
         dist.barrier()
         
         # Store video predictions for potential saving
@@ -505,6 +506,7 @@ class WebsocketPolicyServer:
                 dist.barrier()
                 with torch.no_grad():
                     result_batch, video_pred = self._policy.lazy_joint_forward_causal(batch)
+                    # import pdb; pdb.set_trace()
                 dist.barrier()
 
             except Exception as e:
@@ -579,6 +581,7 @@ class WebsocketPolicyServer:
                     forward_start_time = time.perf_counter()
                     with torch.no_grad():
                         result_batch, video_pred = self._policy.lazy_joint_forward_causal(batch)
+                        # import pdb; pdb.set_trace()
                     dist.barrier()
                     print(f"Forward Time: {time.perf_counter() - forward_start_time:.2f} seconds")
 

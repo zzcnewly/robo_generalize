@@ -43,6 +43,7 @@ sys.path.insert(0, str(_LIBERO_PLUS_ROOT))
 from libero.libero import benchmark
 from libero.libero import get_libero_path
 from libero.libero.envs import OffScreenRenderEnv
+import roboticstoolbox as rtb
 
 import logging
 import time
@@ -231,16 +232,19 @@ def build_observation(
     }
 
 
-def server_action_to_libero(action: np.ndarray) -> list:
+def server_action_to_libero(action: np.ndarray, robot) -> list:
     """Convert DreamZero 8D action to LIBERO 7D action.
 
     DreamZero outputs: (7 joint_position + 1 gripper) = 8D
     LIBERO expects:    (3 delta_pos + 3 delta_rot + 1 gripper) = 7D
-
-    When fine-tuned on LIBERO data, the model should output 6 DOF deltas
-    in the first 6 dims. We take dims [0:6] + dim [7] (gripper).
     """
-    return action[:6].tolist() + [action[-1].item()]
+    # Calculate Forward Kinematics
+    # .fkine returns an SE3 object (4x4 transformation matrix)
+    # print("End Effector Pose (Transformation Matrix):")
+    T = robot.fkine(action[:7])
+    pos = T.t
+    rpy = T.rpy(unit='rad', order='zyx')
+    return np.concatenate([pos, rpy]).tolist() + [action[-1].item()]
 
 
 def parse_server_actions(result) -> np.ndarray:
@@ -303,7 +307,7 @@ def eval_libero(args: Args) -> None:
     client = WebsocketClientPolicy(host=args.host, port=args.port)
     metadata = client.get_server_metadata()
     logging.info(f"Server metadata: {metadata}")
-
+    robot = rtb.models.DH.Panda()
     total_episodes, total_successes = 0, 0
 
     for task_id in tqdm.tqdm(range(num_tasks), desc="Tasks"):
@@ -354,6 +358,7 @@ def eval_libero(args: Args) -> None:
                         )
 
                         result = client.infer(server_obs)
+                        # import pdb; pdb.set_trace()
                         actions = parse_server_actions(result)
 
                         assert len(actions) >= args.replan_steps, (
@@ -361,7 +366,7 @@ def eval_libero(args: Args) -> None:
                         )
 
                         for a in actions[: args.replan_steps]:
-                            action_plan.append(server_action_to_libero(a))
+                            action_plan.append(server_action_to_libero(a, robot))
 
                     action = action_plan.popleft()
                     obs, reward, done, info = env.step(action)

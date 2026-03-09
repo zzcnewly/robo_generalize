@@ -502,6 +502,9 @@ class GrootSimPolicy(BaseGrootSimPolicy):
         unnormalized_action = self.eval_transform.unapply(
             dict(action=batch.normalized_action.cpu())
         )
+        ## Shapes to keep in mind:
+        # batch.normalized_action.shape torch.Size([1, 24, 32])
+        # unnormalized_action["action.joint_position"].shape (1, 24, 7)
         
         # Check if relative_action is enabled and convert relative to absolute
         relative_action = self.train_cfg.get('relative_action', False)
@@ -564,7 +567,7 @@ class GrootSimPolicy(BaseGrootSimPolicy):
                 # Add state to relative action to get absolute action
                 print("last_state", last_state.shape, "unnormalized_action[action_key]", unnormalized_action[action_key].shape)
                 unnormalized_action[action_key] = unnormalized_action[action_key] + last_state
-        
+
         batch.act = unnormalized_action
         return batch
 
@@ -678,6 +681,7 @@ class GrootSimPolicy(BaseGrootSimPolicy):
         with torch.inference_mode():
             # with maybe_autocast:
             model_pred = self.trained_model.lazy_joint_video_action_causal(normalized_input, latent_video=latent_video)
+            # up to now action shape[-1] is 32 (default
         normalized_action = model_pred["action_pred"].float()
         video_pred = model_pred["video_pred"]
 
@@ -703,7 +707,12 @@ class GrootSimPolicy(BaseGrootSimPolicy):
                   f"Transform: {transform_time:.3f} seconds, "
                   f"Model: {model_time:.3f} seconds, "
                   f"Untransform: {untransform_time:.3f} seconds")
-
+        ## output
+        # > batch[0]["normalized_action"].shape
+        # torch.Size([24, 32])
+        # > batch[0]["act"]
+        # action.joint_position: array([-0.10049534, -0.47959608, 0.1356138, 0.42977774, -0.1835103, 0.50057232, -0.5077405]),
+        # action.gripper_position: 0.57421875,
         return batch, video_pred
     
     def lazy_joint_forward_causal_gt_cond(self, batch, video=None, latent_video=None, state=None, **kwargs):

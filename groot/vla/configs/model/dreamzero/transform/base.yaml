@@ -1,6 +1,7 @@
 # @package _global_
 
 embodiment_tag_to_projector_index:
+
   real_gr1_arms_only: 0
   real_gr1_arms_only_annotated: 1
   real_gr1_arms_waist: 2
@@ -40,3 +41,4 @@ embodiment_tag_to_projector_index:
   sim_behavior_r1_pro: 31
   mecka_hands: 27
   real_r1_pro_sharpa: 28
+  libero_sim: 33

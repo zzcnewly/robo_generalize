@@ -139,7 +139,14 @@ class ComposedModalityTransform(ModalityTransform):
         for i, transform in enumerate(reversed(self.transforms)):
             if isinstance(transform, InvertibleModalityTransform):
                 try:
+                    # reversed order
+                    # DreamTransform:
+                    # [1, 24, 32] 'action'
+                    # ConcatTransform:
+                    # [1, 24, 7 ] dict_keys(['action.joint_position', 'action.gripper_position'])
+
                     data = transform.unapply(data)
+                    # import pdb; pdb.set_trace()
                 except Exception as e:
                     step = len(self.transforms) - i - 1
                     raise ValueError(f"Error unapplying transform {step} to data: {e}") from e
