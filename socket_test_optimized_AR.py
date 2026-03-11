@@ -788,12 +788,10 @@ def main(args: Args) -> None:
 
     if rank == 0:
         logging.info("Creating server (host: %s, ip: %s)", hostname, local_ip)
-        # Create output directory for videos
-        # Extract parent directory and checkpoint name from model_path
-        parent_dir = os.path.dirname(model_path)
+        # Create output directory for videos under the current working directory
         date_suffix = datetime.datetime.now().strftime("%Y%m%d")
         checkpoint_name = os.path.basename(model_path)
-        output_dir = os.path.join(parent_dir, f"real_world_eval_gen_{date_suffix}_{args.index}", checkpoint_name)
+        output_dir = os.path.join(os.getcwd(), "eval_output", "generated_videos", f"{checkpoint_name}_{date_suffix}_{args.index}")
         os.makedirs(output_dir, exist_ok=True)
         logging.info("Videos will be saved to: %s", output_dir)
     else:
