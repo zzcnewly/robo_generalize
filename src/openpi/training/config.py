@@ -15,6 +15,7 @@ import tyro
 
 import openpi.models.model as _model
 import openpi.models.pi0_config as pi0_config
+import openpi.models.pi05_config as pi05_config
 import openpi.models.pi0_fast as pi0_fast
 import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
@@ -561,6 +562,29 @@ _CONFIGS = [
     #
     # Inference Aloha configs.
     #
+    TrainConfig(
+        name="right_pi05_20",
+        exp_name="debug_test",
+        model=pi05_config.Pi05Config(action_horizon=20, pi05=True, max_token_len=50),
+        data=None,
+        # data=LeRobotX2robotDataConfig(
+        #     repo_id="pi0_distribute_package",
+        #     base_config=DataConfig(
+        #     asset_id="pi0_distribute_package",
+        #     ),
+        # ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=3000,
+            peak_lr=2.5e-5,
+            decay_steps=150_000,
+            decay_lr=2.5e-6,
+        ),
+        # Below you can define other hyperparameters like the learning rate, number of training steps, etc.
+        # Check the base TrainConfig class for a full list of available hyperparameters.
+        num_train_steps=30_000,
+    ),
+
+
     TrainConfig(
         name="pi0_aloha",
         model=pi0_config.Pi0Config(),
