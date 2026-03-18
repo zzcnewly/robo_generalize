@@ -1,6 +1,7 @@
 CLAUDE.md
 temp_doc/
-
+logs/
+CLAUDE/
 
 # Data directories.
 assets/

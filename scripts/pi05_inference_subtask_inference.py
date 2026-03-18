@@ -16,101 +16,166 @@ PALIGEMMA_EOS_TOKEN = 1
 max_decoding_steps = 25
 temperature = 0.1
 
-### Step 1: Initialize model and load pretrained params
-print("debug line 0")
-config = get_config("right_pi05_20")
+### Step 1: Initialize model and load fine-tuned params
+# Toggle between base model and fine-tuned model
+USE_FINETUNED = True
+
+print("Loading model...")
+config = get_config("pi05_language_recovery")
 model_rng = jax.random.key(0)
 rng = jax.random.key(0)
-print("debug line 0-0")
-model = config.model.create(model_rng)
 
-# Load pretrained params
-print(f"debug line 0-1")
-graphdef, state = nnx.split(model)
-loader = config.weight_loader
-params = nnx.state(model)
-# Convert frozen params to bfloat16.
-params = nnx_utils.state_map(params, config.freeze_filter, lambda p: p.replace(p.value.astype(jnp.bfloat16)))
+if USE_FINETUNED:
+    # Load from fine-tuned checkpoint (language recovery)
+    checkpoint_path = config.checkpoint_dir / "499" / "params"
+    print(f"Loading fine-tuned checkpoint from: {checkpoint_path}")
+    params = _model.restore_params(checkpoint_path, dtype=jnp.bfloat16)
+    model = config.model.load(params)
+else:
+    # Load from base pretrained model
+    model = config.model.create(model_rng)
+    graphdef, state = nnx.split(model)
+    loader = config.weight_loader
+    params = nnx.state(model)
+    params = nnx_utils.state_map(params, config.freeze_filter, lambda p: p.replace(p.value.astype(jnp.bfloat16)))
+    params_shape = params.to_pure_dict()
+    loaded_params = loader.load(params_shape)
+    state.replace_by_pure_dict(loaded_params)
+    model = nnx.merge(graphdef, state)
 
-print("denig line 0-2")
-params_shape = params.to_pure_dict()
-loaded_params = loader.load(params_shape)
-state.replace_by_pure_dict(loaded_params)
-model = nnx.merge(graphdef, state)
-
-### Step 2: Construct an observation batch
-# load 3 images from tmp_test as uint8 format
-print("debug line 1")
-img_share_path = './temp_doc/examples'
-img_name_list = ['faceImg.png', 'leftImg.png', 'rightImg.png']
-img_list = []
-for img_name in img_name_list:
-    img_path = os.path.join(img_share_path, img_name)
-    img = cv2.imread(img_path)
-    img_list.append(img)
-# Convert images from [0, 255] to [-1, 1] range as expected by the model
-img_dict = {
-    "base_0_rgb": jnp.array(img_list[0][np.newaxis, :, :, :]).astype(jnp.float32) / 127.5 - 1.0,
-    "left_wrist_0_rgb": jnp.array(img_list[1][np.newaxis, :, :, :]).astype(jnp.float32) / 127.5 - 1.0,
-    "right_wrist_0_rgb": jnp.array(img_list[2][np.newaxis, :, :, :]).astype(jnp.float32) / 127.5 - 1.0,
-}
-
-
-# Tokenize the prompt
-high_level_prompt = 'Pick up the flashcard on the table'
-low_level_prompt = 'ABCDEFG'
-tokenizer = PaligemmaTokenizer(max_len=50)
-tokenized_prompt, tokenized_prompt_mask, token_ar_mask, token_loss_mask = tokenizer.tokenize_high_low_prompt(high_level_prompt, low_level_prompt)
-
-print("debug line 2")
-
-# form a observation
-data = {
-    'image': img_dict,
-    'image_mask': {key: jnp.ones(1, dtype=jnp.bool) for key in img_dict.keys()},
-    'state': jnp.zeros((1, 32), dtype=jnp.float32),
-    # 'state': None,
-    'tokenized_prompt': jnp.stack([tokenized_prompt], axis=0),
-    'tokenized_prompt_mask': jnp.stack([tokenized_prompt_mask], axis=0),
-    'token_ar_mask': jnp.stack([token_ar_mask], axis=0),
-    'token_loss_mask': jnp.stack([token_loss_mask], axis=0),
-}
-observation = Observation.from_dict(data)
-rng = jax.random.key(42)
-observation = _model.preprocess_observation(rng, observation, train=False, image_keys=list(observation.images.keys()))
-
-# Set the low level task tokens to padding according to the loss mask (loss mask is the indication of low-level prompt)
-# We move it from inside model to outside because the inside func need to be jittable
-loss_mask = jnp.array(observation.token_loss_mask)
-new_tokenized_prompt = observation.tokenized_prompt.at[loss_mask].set(0)
-new_tokenized_prompt_mask = observation.tokenized_prompt_mask.at[loss_mask].set(False)
-new_observation = _model.Observation(
-                    images=observation.images,
-                    image_masks=observation.image_masks,
-                    state=observation.state,
-                    tokenized_prompt=new_tokenized_prompt,
-                    tokenized_prompt_mask=new_tokenized_prompt_mask,
-                    token_ar_mask=observation.token_ar_mask,
-                    token_loss_mask=observation.token_loss_mask,
-                    )
-observation = _model.preprocess_observation(None, new_observation, train=False, image_keys=list(observation.images.keys()))
-observation = jax.tree.map(jax.device_put, observation)
-
-
-### Step 3: Run one inference
-
-# Jax Just-in-time compilation
-# Make max_decoding_steps static for JIT to avoid tracer issues in jnp.pad
+# JIT compile the decoding function once (first call will be slow)
 model.jit_sample_low_level_task = nnx_utils.module_jit(model.sample_low_level_task, static_argnums=(3,))
-for i in range(3):
+
+# Tokenizer for encoding/decoding
+tokenizer = PaligemmaTokenizer(max_len=50)
+
+print("Model loaded successfully!")
+
+
+def load_images(base_path, left_path, right_path):
+    """Load 3 camera images and convert to model input format.
+
+    Args:
+        base_path: path to base camera image
+        left_path: path to left wrist camera image
+        right_path: path to right wrist camera image
+
+    Returns:
+        dict of image arrays in [-1, 1] range with batch dim
+    """
+    img_paths = {
+        "base_0_rgb": base_path,
+        "left_wrist_0_rgb": left_path,
+        "right_wrist_0_rgb": right_path,
+    }
+    img_dict = {}
+    for key, path in img_paths.items():
+        img = cv2.imread(path)
+        if img is None:
+            print(f"Warning: could not load {path}, using zeros")
+            img = np.zeros((224, 224, 3), dtype=np.uint8)
+        img_dict[key] = jnp.array(img[np.newaxis, :, :, :]).astype(jnp.float32) / 127.5 - 1.0
+    return img_dict
+
+
+def build_observation(img_dict, high_prompt, low_prompt="PLACEHOLDER"):
+    """Build an Observation from images and prompts.
+
+    Args:
+        img_dict: dict of image arrays from load_images()
+        high_prompt: high-level task description
+        low_prompt: placeholder low-level prompt (will be masked out for prediction)
+
+    Returns:
+        preprocessed Observation ready for inference
+    """
+    # Tokenize with high/low format to get proper masks
+    tokens, token_mask, ar_mask, loss_mask = tokenizer.tokenize_high_low_prompt(high_prompt, low_prompt)
+
+    data = {
+        'image': img_dict,
+        'image_mask': {key: jnp.ones(1, dtype=jnp.bool_) for key in img_dict},
+        'state': jnp.zeros((1, 32), dtype=jnp.float32),
+        'tokenized_prompt': jnp.stack([tokens], axis=0),
+        'tokenized_prompt_mask': jnp.stack([token_mask], axis=0),
+        'token_ar_mask': jnp.stack([ar_mask], axis=0),
+        'token_loss_mask': jnp.stack([loss_mask], axis=0),
+    }
+    observation = Observation.from_dict(data)
+    rng_preprocess = jax.random.key(42)
+    observation = _model.preprocess_observation(rng_preprocess, observation, train=False, image_keys=list(observation.images.keys()))
+
+    # Mask out the low-level tokens (the model should predict these)
+    lm = jnp.array(observation.token_loss_mask)
+    new_tokenized_prompt = observation.tokenized_prompt.at[lm].set(0)
+    new_tokenized_prompt_mask = observation.tokenized_prompt_mask.at[lm].set(False)
+    observation = _model.Observation(
+        images=observation.images,
+        image_masks=observation.image_masks,
+        state=observation.state,
+        tokenized_prompt=new_tokenized_prompt,
+        tokenized_prompt_mask=new_tokenized_prompt_mask,
+        token_ar_mask=observation.token_ar_mask,
+        token_loss_mask=observation.token_loss_mask,
+    )
+    observation = _model.preprocess_observation(None, observation, train=False, image_keys=list(observation.images.keys()))
+    observation = jax.tree.map(jax.device_put, observation)
+    return observation
+
+
+def predict(observation):
+    """Run subtask prediction on an observation.
+
+    Returns:
+        decoded text string of the predicted subtask
+    """
     start_time = time.time()
-    predicted_token, kv_cache, mask, ar_mask = model.jit_sample_low_level_task(rng, observation, max_decoding_steps, PALIGEMMA_EOS_TOKEN, temperature)
-    print(len(predicted_token), predicted_token.shape, predicted_token[0])
-    for i in range(predicted_token.shape[0]):
-        print('======================')
-        print(f"\033[31m[PRED]\033[0m " + tokenizer.detokenize(np.array(predicted_token[i], dtype=np.int32)), flush=True)
-        print(f"\033[31m[MASK]\033[0m " + tokenizer.detokenize(np.array(data['tokenized_prompt'], dtype=np.int32)), flush=True)
-        print('======================')
-    end_time = time.time()
-    print(f"Time taken: {end_time - start_time} seconds")
-    time.sleep(5)
+    predicted_token, kv_cache, mask, ar_mask = model.jit_sample_low_level_task(
+        rng, observation, max_decoding_steps, PALIGEMMA_EOS_TOKEN, temperature
+    )
+    elapsed = time.time() - start_time
+
+    # Decode predicted tokens to text
+    pred_text = tokenizer.detokenize(np.array(predicted_token[0], dtype=np.int32))
+    print(f"\033[31m[PRED]\033[0m {pred_text}")
+    print(f"Time: {elapsed:.3f}s")
+    return pred_text
+
+
+### Step 2: Load default images and run initial inference
+img_dir = './temp_doc/examples'
+img_dict = load_images(
+    os.path.join(img_dir, 'faceImg.png'),
+    os.path.join(img_dir, 'leftImg.png'),
+    os.path.join(img_dir, 'rightImg.png'),
+)
+
+# Run one warmup inference to trigger JIT compilation
+print("\n--- Warmup inference (JIT compilation, will be slow) ---")
+obs = build_observation(img_dict, "Pick up the flashcard on the table")
+predict(obs)
+
+# ============================================================
+# Interactive pdb session
+# ============================================================
+# You can now try different inputs interactively:
+#
+#   # Try a different prompt with same images:
+#   obs = build_observation(img_dict, "Open the drawer")
+#   predict(obs)
+#
+#   # Load different images:
+#   img_dict = load_images("path/to/base.png", "path/to/left.png", "path/to/right.png")
+#   obs = build_observation(img_dict, "Stack the plates")
+#   predict(obs)
+#
+#   # Try all 5 training prompts:
+#   for p in ["Pick up the red cup", "Place the block on the shelf", "Open the drawer", "Wipe the table", "Stack the plates"]:
+#       obs = build_observation(img_dict, p)
+#       predict(obs)
+#
+#   # Continue execution:
+#   c
+# ============================================================
+print("\n--- Dropping into interactive pdb. Use build_observation() and predict() to try inputs. ---")
+import pdb; pdb.set_trace()

@@ -267,6 +267,42 @@ class TokenizePrompt(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class TokenizeHighLowPrompt(DataTransformFn):
+    """Tokenize high-level and low-level prompts for pi05 subtask generation training.
+
+    Uses tokenize_high_low_prompt() to produce token_ar_mask and token_loss_mask,
+    which are required for the subtask generation cross-entropy loss.
+    """
+
+    tokenizer: _tokenizer.PaligemmaTokenizer
+
+    def __call__(self, data: DataDict) -> DataDict:
+        # Extract high-level prompt (required)
+        high_prompt = data.pop("prompt", None)
+        if high_prompt is None:
+            raise ValueError("High-level prompt ('prompt') is required")
+        if not isinstance(high_prompt, str):
+            high_prompt = high_prompt.item()
+
+        # Extract low-level prompt (required for subtask generation training)
+        low_prompt = data.pop("low_prompt", None)
+        if low_prompt is None:
+            raise ValueError("Low-level prompt ('low_prompt') is required for subtask generation training")
+        if not isinstance(low_prompt, str):
+            low_prompt = low_prompt.item()
+
+        # Tokenize with high/low prompt format that produces ar_mask and loss_mask
+        tokens, token_mask, ar_mask, loss_mask = self.tokenizer.tokenize_high_low_prompt(high_prompt, low_prompt)
+        return {
+            **data,
+            "tokenized_prompt": tokens,
+            "tokenized_prompt_mask": token_mask,
+            "token_ar_mask": ar_mask,
+            "token_loss_mask": loss_mask,
+        }
+
+
+@dataclasses.dataclass(frozen=True)
 class TokenizeFASTInputs(DataTransformFn):
     tokenizer: _tokenizer.FASTTokenizer
 

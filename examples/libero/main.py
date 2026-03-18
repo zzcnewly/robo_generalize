@@ -1,5 +1,6 @@
 import collections
 import dataclasses
+import json
 import logging
 import math
 import pathlib
@@ -40,7 +41,8 @@ class Args:
     #################################################################################################################
     # Utils
     #################################################################################################################
-    video_out_path: str = "data/libero/videos"  # Path to save videos
+    video_out_path: str = "./.cache/output/video/libero/temp"  # Path to save videos
+    json_out_path: str = ".cache/output/libero_output_json"  # Path to save trajectory JSON files
 
     seed: int = 7  # Random Seed (for reproducibility)
 
@@ -56,6 +58,7 @@ def eval_libero(args: Args) -> None:
     logging.info(f"Task suite: {args.task_suite_name}")
 
     pathlib.Path(args.video_out_path).mkdir(parents=True, exist_ok=True)
+    pathlib.Path(args.json_out_path).mkdir(parents=True, exist_ok=True)
 
     if args.task_suite_name == "libero_spatial":
         max_steps = 220  # longest training demo has 193 steps
@@ -84,6 +87,12 @@ def eval_libero(args: Args) -> None:
         # Initialize LIBERO environment and task description
         env, task_description = _get_libero_env(task, LIBERO_ENV_RESOLUTION, args.seed)
 
+        # Collect trajectory data for all rollouts of this task
+        task_rollout_data = []
+
+        # Enumerate object names from the environment for logging 3D positions
+        object_names = list(env.env.objects_dict.keys()) + list(env.env.fixtures_dict.keys())
+
         # Start episodes
         task_episodes, task_successes = 0, 0
         for episode_idx in tqdm.tqdm(range(args.num_trials_per_task)):
@@ -100,6 +109,11 @@ def eval_libero(args: Args) -> None:
             t = 0
             replay_images = []
 
+            # Per-episode trajectory storage
+            eef_trajectory = []  # end-effector positions over time
+            action_history = []  # actions executed at each step
+            object_positions = []  # object 3D positions at each step
+
             logging.info(f"Starting episode {task_episodes+1}...")
             while t < max_steps + args.num_steps_wait:
                 try:
@@ -108,6 +122,12 @@ def eval_libero(args: Args) -> None:
                     if t < args.num_steps_wait:
                         obs, reward, done, info = env.step(LIBERO_DUMMY_ACTION)
                         t += 1
+                        # Record state during wait period as well
+                        eef_trajectory.append(obs["robot0_eef_pos"].tolist())
+                        action_history.append(LIBERO_DUMMY_ACTION)
+                        object_positions.append({
+                            name: obs[f"{name}_pos"].tolist() for name in object_names if f"{name}_pos" in obs
+                        })
                         continue
 
                     # Get preprocessed image
@@ -150,7 +170,16 @@ def eval_libero(args: Args) -> None:
                     action = action_plan.popleft()
 
                     # Execute action in environment
-                    obs, reward, done, info = env.step(action.tolist())
+                    action_list = action.tolist()
+                    obs, reward, done, info = env.step(action_list)
+
+                    # Record end-effector position, executed action, and object 3D locations
+                    eef_trajectory.append(obs["robot0_eef_pos"].tolist())
+                    action_history.append(action_list)
+                    object_positions.append({
+                        name: obs[f"{name}_pos"].tolist() for name in object_names if f"{name}_pos" in obs
+                    })
+
                     if done:
                         task_successes += 1
                         total_successes += 1
@@ -160,6 +189,16 @@ def eval_libero(args: Args) -> None:
                 except Exception as e:
                     logging.error(f"Caught exception: {e}")
                     break
+
+            # Store this rollout's trajectory data
+            task_rollout_data.append({
+                "episode_idx": episode_idx,
+                "success": bool(done),
+                "num_steps": len(eef_trajectory),
+                "eef_trajectory": eef_trajectory,
+                "actions": action_history,
+                "object_positions": object_positions,
+            })
 
             task_episodes += 1
             total_episodes += 1
@@ -177,6 +216,20 @@ def eval_libero(args: Args) -> None:
             logging.info(f"Success: {done}")
             logging.info(f"# episodes completed so far: {total_episodes}")
             logging.info(f"# successes: {total_successes} ({total_successes / total_episodes * 100:.1f}%)")
+
+        # Save all rollout data for this task to a JSON file
+        json_filename = f"{task_description}.json"
+        json_filepath = pathlib.Path(args.json_out_path) / json_filename
+        with open(json_filepath, "w") as f:
+            json.dump({
+                "task_description": task_description,
+                "task_suite": args.task_suite_name,
+                "num_rollouts": len(task_rollout_data),
+                "success_rate": float(task_successes) / float(task_episodes),
+                "object_names": [name for name in object_names if f"{name}_pos" in obs],
+                "rollouts": task_rollout_data,
+            }, f, indent=2)
+        logging.info(f"Saved trajectory data to {json_filepath}")
 
         # Log final results
         logging.info(f"Current task success rate: {float(task_successes) / float(task_episodes)}")

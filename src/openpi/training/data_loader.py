@@ -136,6 +136,11 @@ def create_torch_dataset(
         raise ValueError("Repo ID is not set. Cannot create dataset.")
     if repo_id == "fake":
         return FakeDataset(model_config, num_samples=1024)
+    if repo_id == "language_recovery":
+        # In-memory dataset with 5 hand-made examples for language recovery training
+        from openpi.training.language_recovery_dataset import LanguageRecoveryDataset
+
+        return LanguageRecoveryDataset(model_config)
 
     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
     dataset = lerobot_dataset.LeRobotDataset(
@@ -172,7 +177,8 @@ def create_rlds_dataset(
 def transform_dataset(dataset: Dataset, data_config: _config.DataConfig, *, skip_norm_stats: bool = False) -> Dataset:
     """Transform the dataset by applying the data transforms."""
     norm_stats = {}
-    if data_config.repo_id != "fake" and not skip_norm_stats:
+    # Skip norm stats for fake/language_recovery datasets (no normalization needed)
+    if data_config.repo_id not in ("fake", "language_recovery") and not skip_norm_stats:
         if data_config.norm_stats is None:
             raise ValueError(
                 "Normalization stats not found. "

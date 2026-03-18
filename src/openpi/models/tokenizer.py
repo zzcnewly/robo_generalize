@@ -101,7 +101,6 @@ class PaligemmaTokenizer:
     def detokenize(self, tokens: np.ndarray) -> str:
         """Decode tokens back to text, removing padding tokens."""
         # Remove padding tokens (tokens with value 0)
-        import pdb; pdb.set_trace()
         non_padding_tokens = tokens[tokens != 0]
         return self._tokenizer.decode(non_padding_tokens.tolist())
 

@@ -22,6 +22,7 @@ import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.shared.download as _download
+import openpi.shared.nnx_utils as nnx_utils
 import openpi.shared.normalize as _normalize
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
 import openpi.training.misc.polaris_config as polaris_config
@@ -137,6 +138,18 @@ class ModelTransformFactory(GroupFactory):
                         _transforms.PadStatesAndActions(model_config.action_dim),
                     ],
                 )
+            case _model.ModelType.RIGHT_PI05:
+                # RIGHT_PI05 uses TokenizeHighLowPrompt for subtask generation training
+                return _transforms.Group(
+                    inputs=[
+                        _transforms.InjectDefaultPrompt(self.default_prompt),
+                        _transforms.ResizeImages(224, 224),
+                        _transforms.TokenizeHighLowPrompt(
+                            _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                        ),
+                        _transforms.PadStatesAndActions(model_config.action_dim),
+                    ],
+                )
             case _model.ModelType.PI0_FAST:
                 tokenizer_cls = (
                     _tokenizer.FASTTokenizer
@@ -208,6 +221,40 @@ class FakeDataConfig(DataConfigFactory):
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         return DataConfig(repo_id=self.repo_id)
+
+
+@dataclasses.dataclass(frozen=True)
+class LanguageRecoveryDataConfig(DataConfigFactory):
+    """Data config for pi05 language recovery training with 5 hand-made examples.
+
+    Uses TokenizeHighLowPrompt to produce ar_mask and loss_mask needed for
+    the subtask generation cross-entropy loss.
+    """
+
+    repo_id: str = "language_recovery"
+    # Path to directory containing test images
+    image_dir: str = "./temp_doc/examples"
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # Use TokenizeHighLowPrompt for RIGHT_PI05 model type
+        model_transforms = _transforms.Group(
+            inputs=[
+                _transforms.ResizeImages(224, 224),
+                _transforms.TokenizeHighLowPrompt(
+                    _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                ),
+                _transforms.PadStatesAndActions(model_config.action_dim),
+            ],
+        )
+        return DataConfig(
+            repo_id=self.repo_id,
+            asset_id=None,
+            # No norm stats needed for this toy dataset
+            norm_stats=None,
+            model_transforms=model_transforms,
+            use_quantile_norm=False,
+        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -582,6 +629,47 @@ _CONFIGS = [
         # Below you can define other hyperparameters like the learning rate, number of training steps, etc.
         # Check the base TrainConfig class for a full list of available hyperparameters.
         num_train_steps=30_000,
+    ),
+    #
+    # Pi05 language recovery config: fine-tune with 5 hand-made examples
+    # to recover autoregressive language capability from PaliGemma backbone.
+    #
+    TrainConfig(
+        name="pi05_language_recovery",
+        exp_name="lang_recovery_v1",
+        model=pi05_config.Pi05Config(action_horizon=20, pi05=True, max_token_len=50),
+        data=LanguageRecoveryDataConfig(
+            image_dir="./temp_doc/examples",
+        ),
+        # Small batch size to fit in GPU memory
+        batch_size=2,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=50,
+            peak_lr=5e-5,
+            decay_steps=2000,
+            decay_lr=5e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=None,
+        # Freeze everything except the PaliGemma LLM backbone (language model).
+        # We only want to recover language output, so freeze vision encoder,
+        # action expert projections, and time MLP.
+        freeze_filter=nnx.Any(
+            nnx_utils.PathRegex(r".*PaliGemma/img.*"),        # freeze vision encoder
+            nnx_utils.PathRegex(r".*action_in_proj.*"),       # freeze action input projection
+            nnx_utils.PathRegex(r".*action_out_proj.*"),      # freeze action output projection
+            nnx_utils.PathRegex(r".*time_mlp.*"),             # freeze time MLP
+        ),
+        # Load pretrained pi05 base model weights
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        # Save checkpoints outside home dir to avoid quota issues
+        checkpoint_base_dir="./.cache/all_checkpoints/openpi",
+        num_train_steps=500,
+        # Only save at the very end to avoid disk quota issues
+        save_interval=499,
+        log_interval=10,
+        overwrite=True,
+        wandb_enabled=False,
     ),
 
 
